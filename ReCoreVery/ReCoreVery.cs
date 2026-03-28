@@ -1,268 +1,262 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using Terraria;
 using Terraria.ID;
 using TerrariaApi.Server;
 using TShockAPI;
 using TShockAPI.Hooks;
 
-namespace ReCoreVery
+namespace ReCoreVery;
+
+[ApiVersion(2, 1)]
+public class ReCoreVery : TerrariaPlugin
 {
-    [ApiVersion(2, 1)]
-    public class ReCoreVery : TerrariaPlugin
+    public override string Name => "ReCoreVery";
+    public override string Author => "Assistant";
+    public override string Description => "Gives players starter items after death in mediumcore/hardcore mode";
+    public override Version Version => new Version(1, 0, 0);
+
+    private Configuration Config { get; set; } = null!;
+    private HashSet<int> DeadPlayers { get; set; } = new();
+
+    public ReCoreVery(Main game) : base(game)
     {
-        public override string Name => "ReCoreVery";
-        public override string Author => "Assistant";
-        public override string Description => "Gives players starter items after death in mediumcore/hardcore mode";
-        public override Version Version => new Version(1, 0, 0);
+    }
 
-        private Configuration Config;
-        private HashSet<int> DeadPlayers;
+    public override void Initialize()
+    {
+        Config = Configuration.Load();
+        
+        ServerApi.Hooks.GameInitialize.Register(this, OnGameInitialize);
+        ServerApi.Hooks.NetGetData.Register(this, OnGetData);
+        ServerApi.Hooks.ServerLeave.Register(this, OnServerLeave);
+        
+        GetDataHandlers.KillMe += OnKillMe;
+        GeneralHooks.ReloadEvent += OnReload;
+    }
 
-        public ReCoreVery(Main game) : base(game)
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
         {
-            DeadPlayers = new HashSet<int>();
-        }
-
-        public override void Initialize()
-        {
-            Config = Configuration.Load();
+            ServerApi.Hooks.GameInitialize.Deregister(this, OnGameInitialize);
+            ServerApi.Hooks.NetGetData.Deregister(this, OnGetData);
+            ServerApi.Hooks.ServerLeave.Deregister(this, OnServerLeave);
             
-            ServerApi.Hooks.GameInitialize.Register(this, OnGameInitialize);
-            ServerApi.Hooks.NetGetData.Register(this, OnGetData);
-            ServerApi.Hooks.ServerLeave.Register(this, OnServerLeave);
-            
-            GetDataHandlers.KillMe += OnKillMe;
-            GeneralHooks.ReloadEvent += OnReload;
+            GetDataHandlers.KillMe -= OnKillMe;
+            GeneralHooks.ReloadEvent -= OnReload;
+        }
+        base.Dispose(disposing);
+    }
+
+    private void OnGameInitialize(EventArgs args)
+    {
+        Commands.ChatCommands.Add(new Command("recorevery.admin", CommandReload, "rcreload"));
+        Commands.ChatCommands.Add(new Command("recorevery.admin", CommandGiveKit, "rcgive"));
+        Commands.ChatCommands.Add(new Command("recorevery.use", CommandKits, "rckits"));
+    }
+
+    private void OnReload(ReloadEventArgs args)
+    {
+        Config = Configuration.Load();
+        args.Player.SendSuccessMessage("[ReCoreVery] Configuration reloaded.");
+    }
+
+    private void CommandReload(CommandArgs args)
+    {
+        Config = Configuration.Load();
+        args.Player.SendSuccessMessage("[ReCoreVery] Configuration reloaded.");
+    }
+
+    private void CommandGiveKit(CommandArgs args)
+    {
+        if (args.Parameters.Count < 1)
+        {
+            args.Player.SendErrorMessage("Usage: /rcgive <player> [kitname]");
+            return;
         }
 
-        protected override void Dispose(bool disposing)
+        string playerName = args.Parameters[0];
+        var players = TSPlayer.FindByNameOrID(playerName);
+
+        if (players.Count == 0)
         {
-            if (disposing)
-            {
-                ServerApi.Hooks.GameInitialize.Deregister(this, OnGameInitialize);
-                ServerApi.Hooks.NetGetData.Deregister(this, OnGetData);
-                ServerApi.Hooks.ServerLeave.Deregister(this, OnServerLeave);
-                
-                GetDataHandlers.KillMe -= OnKillMe;
-                GeneralHooks.ReloadEvent -= OnReload;
-            }
-            base.Dispose(disposing);
+            args.Player.SendErrorMessage("Player not found.");
+            return;
         }
 
-        private void OnGameInitialize(EventArgs args)
+        if (players.Count > 1)
         {
-            Commands.ChatCommands.Add(new Command("recorevery.admin", CommandReload, "rcreload"));
-            Commands.ChatCommands.Add(new Command("recorevery.admin", CommandGiveKit, "rcgive"));
-            Commands.ChatCommands.Add(new Command("recorevery.use", CommandKits, "rckits"));
+            args.Player.SendErrorMessage("Multiple players found. Be more specific.");
+            return;
         }
 
-        private void OnReload(ReloadEventArgs args)
+        var target = players[0];
+        SpawnKit? kit;
+
+        if (args.Parameters.Count >= 2)
         {
-            Config = Configuration.Load();
-            args.Player.SendSuccessMessage("[ReCoreVery] Configuration reloaded.");
-        }
-
-        private void CommandReload(CommandArgs args)
-        {
-            Config = Configuration.Load();
-            args.Player.SendSuccessMessage("[ReCoreVery] Configuration reloaded.");
-        }
-
-        private void CommandGiveKit(CommandArgs args)
-        {
-            if (args.Parameters.Count < 1)
-            {
-                args.Player.SendErrorMessage("Usage: /rcgive <player> [kitname]");
-                return;
-            }
-
-            string playerName = args.Parameters[0];
-            var players = TSPlayer.FindByNameOrID(playerName);
-
-            if (players.Count == 0)
-            {
-                args.Player.SendErrorMessage("Player not found.");
-                return;
-            }
-
-            if (players.Count > 1)
-            {
-                args.Player.SendErrorMessage("Multiple players found. Be more specific.");
-                return;
-            }
-
-            var target = players[0];
-            SpawnKit kit = null;
-
-            if (args.Parameters.Count >= 2)
-            {
-                string kitName = args.Parameters[1];
-                kit = Config.SpawnKits.FirstOrDefault(k => k.Name.Equals(kitName, StringComparison.OrdinalIgnoreCase));
-                if (kit == null)
-                {
-                    args.Player.SendErrorMessage($"Kit '{kitName}' not found.");
-                    return;
-                }
-            }
-            else
-            {
-                kit = Config.GetKitForPlayer(target);
-            }
-
+            string kitName = args.Parameters[1];
+            kit = Config.SpawnKits.FirstOrDefault(k => k.Name.Equals(kitName, StringComparison.OrdinalIgnoreCase));
             if (kit == null)
             {
-                args.Player.SendErrorMessage("No kit available for this player.");
+                args.Player.SendErrorMessage($"Kit '{kitName}' not found.");
                 return;
             }
-
-            GiveKit(target, kit);
-            args.Player.SendSuccessMessage($"Gave kit '{kit.Name}' to {target.Name}.");
+        }
+        else
+        {
+            kit = Config.GetKitForPlayer(target);
         }
 
-        private void CommandKits(CommandArgs args)
+        if (kit == null)
         {
-            var availableKits = Config.SpawnKits
-                .Where(k => string.IsNullOrEmpty(k.Permission) || args.Player.HasPermission(k.Permission))
-                .Select(k => k.Name)
-                .ToList();
-
-            if (availableKits.Count == 0)
-            {
-                args.Player.SendInfoMessage("No kits available for you.");
-                return;
-            }
-
-            args.Player.SendInfoMessage($"Available kits: {string.Join(", ", availableKits)}");
+            args.Player.SendErrorMessage("No kit available for this player.");
+            return;
         }
 
-        private void OnKillMe(object sender, GetDataHandlers.KillMeEventArgs args)
+        GiveKit(target, kit);
+        args.Player.SendSuccessMessage($"Gave kit '{kit.Name}' to {target.Name}.");
+    }
+
+    private void CommandKits(CommandArgs args)
+    {
+        var availableKits = Config.SpawnKits
+            .Where(k => string.IsNullOrEmpty(k.Permission) || args.Player.HasPermission(k.Permission))
+            .Select(k => k.Name)
+            .ToList();
+
+        if (availableKits.Count == 0)
         {
-            if (!Config.Enabled)
-                return;
+            args.Player.SendInfoMessage("No kits available for you.");
+            return;
+        }
 
-            var player = TShock.Players[args.PlayerId];
-            if (player == null || !player.Active)
-                return;
+        args.Player.SendInfoMessage($"Available kits: {string.Join(", ", availableKits)}");
+    }
 
-            int difficulty = player.TPlayer.difficulty;
-            
-            bool shouldGiveKit = false;
-            
-            if (Config.MediumcoreOnly)
-            {
-                if (difficulty == 1)
-                    shouldGiveKit = true;
-                if (Config.HardcoreIncluded && difficulty == 2)
-                    shouldGiveKit = true;
-            }
-            else
-            {
+    private void OnKillMe(object? sender, GetDataHandlers.KillMeEventArgs args)
+    {
+        if (!Config.Enabled)
+            return;
+
+        var player = TShock.Players[args.PlayerId];
+        if (player == null || !player.Active)
+            return;
+
+        int difficulty = player.TPlayer.difficulty;
+        
+        bool shouldGiveKit = false;
+        
+        if (Config.MediumcoreOnly)
+        {
+            if (difficulty == 1)
                 shouldGiveKit = true;
-            }
+            if (Config.HardcoreIncluded && difficulty == 2)
+                shouldGiveKit = true;
+        }
+        else
+        {
+            shouldGiveKit = true;
+        }
 
-            if (shouldGiveKit)
+        if (shouldGiveKit)
+        {
+            lock (DeadPlayers)
             {
-                lock (DeadPlayers)
+                DeadPlayers.Add(args.PlayerId);
+            }
+        }
+    }
+
+    private void OnGetData(GetDataEventArgs args)
+    {
+        if (args.MsgID != PacketTypes.PlayerSpawn)
+            return;
+
+        if (!Config.Enabled)
+            return;
+
+        int playerId = args.Msg.whoAmI;
+
+        bool wasDead;
+        lock (DeadPlayers)
+        {
+            wasDead = DeadPlayers.Remove(playerId);
+        }
+
+        if (!wasDead)
+            return;
+
+        var player = TShock.Players[playerId];
+        if (player == null || !player.Active)
+            return;
+
+        var kit = Config.GetKitForPlayer(player);
+        if (kit == null)
+            return;
+
+        if (Config.RespawnDelaySeconds > 0)
+        {
+            Task.Delay(Config.RespawnDelaySeconds * 1000).ContinueWith(_ =>
+            {
+                if (player.Active)
                 {
-                    DeadPlayers.Add(args.PlayerId);
+                    GiveKit(player, kit);
                 }
-            }
+            });
         }
-
-        private void OnGetData(GetDataEventArgs args)
+        else
         {
-            if (args.MsgID != PacketTypes.PlayerSpawn)
-                return;
-
-            if (!Config.Enabled)
-                return;
-
-            int playerId = args.Msg.whoAmI;
-
-            bool wasDead;
-            lock (DeadPlayers)
+            Task.Delay(500).ContinueWith(_ =>
             {
-                wasDead = DeadPlayers.Remove(playerId);
-            }
-
-            if (!wasDead)
-                return;
-
-            var player = TShock.Players[playerId];
-            if (player == null || !player.Active)
-                return;
-
-            var kit = Config.GetKitForPlayer(player);
-            if (kit == null)
-                return;
-
-            if (Config.RespawnDelaySeconds > 0)
-            {
-                Task.Delay(Config.RespawnDelaySeconds * 1000).ContinueWith(t =>
+                if (player.Active)
                 {
-                    if (player != null && player.Active)
-                    {
-                        GiveKit(player, kit);
-                    }
-                });
-            }
-            else
-            {
-                Task.Delay(500).ContinueWith(t =>
-                {
-                    if (player != null && player.Active)
-                    {
-                        GiveKit(player, kit);
-                    }
-                });
-            }
+                    GiveKit(player, kit);
+                }
+            });
         }
+    }
 
-        private void OnServerLeave(LeaveEventArgs args)
+    private void OnServerLeave(LeaveEventArgs args)
+    {
+        lock (DeadPlayers)
         {
-            lock (DeadPlayers)
-            {
-                DeadPlayers.Remove(args.Who);
-            }
+            DeadPlayers.Remove(args.Who);
         }
+    }
 
-        private void GiveKit(TSPlayer player, SpawnKit kit)
+    private void GiveKit(TSPlayer player, SpawnKit kit)
+    {
+        foreach (var itemData in kit.Items)
         {
-            foreach (var itemData in kit.Items)
-            {
-                int itemId = GetItemId(itemData.ItemNameOrId);
-                if (itemId <= 0 || itemId >= ItemID.Count)
-                    continue;
+            int itemId = GetItemId(itemData.ItemNameOrId);
+            if (itemId <= 0 || itemId >= ItemID.Count)
+                continue;
 
-                int stack = Math.Max(1, itemData.Stack);
-                byte prefix = itemData.Prefix;
+            int stack = Math.Max(1, itemData.Stack);
+            byte prefix = itemData.Prefix;
 
-                player.GiveItem(itemId, stack, prefix);
-            }
-
-            if (Config.AnnounceToPlayer && !string.IsNullOrEmpty(Config.AnnounceMessage))
-            {
-                player.SendSuccessMessage(Config.AnnounceMessage);
-            }
+            player.GiveItem(itemId, stack, prefix);
         }
 
-        private int GetItemId(string itemNameOrId)
+        if (Config.AnnounceToPlayer && !string.IsNullOrEmpty(Config.AnnounceMessage))
         {
-            if (int.TryParse(itemNameOrId, out int itemId))
-            {
-                return itemId;
-            }
-
-            var items = TShock.Utils.GetItemByIdOrName(itemNameOrId);
-            if (items.Count == 1)
-            {
-                return items[0].netID;
-            }
-
-            return 0;
+            player.SendSuccessMessage(Config.AnnounceMessage);
         }
+    }
+
+    private static int GetItemId(string itemNameOrId)
+    {
+        if (int.TryParse(itemNameOrId, out int itemId))
+        {
+            return itemId;
+        }
+
+        var items = TShock.Utils.GetItemByIdOrName(itemNameOrId);
+        if (items.Count == 1)
+        {
+            return items[0].type;
+        }
+
+        return 0;
     }
 }
