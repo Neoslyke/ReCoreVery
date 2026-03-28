@@ -10,9 +10,9 @@ namespace ReCoreVery;
 public class ReCoreVery : TerrariaPlugin
 {
     public override string Name => "ReCoreVery";
-    public override string Author => "Assistant";
-    public override string Description => "Gives players starter items after death in mediumcore/hardcore mode";
+    public override string Author => "Neoslyke";
     public override Version Version => new Version(1, 0, 0);
+    public override string Description => "Gives players starter items after death in mediumcore/hardcore mode";
 
     private Configuration Config { get; set; } = null!;
     private HashSet<int> DeadPlayers { get; set; } = new();
