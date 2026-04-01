@@ -17,6 +17,9 @@ public class Configuration
     [JsonProperty("respawnDelaySeconds")]
     public int RespawnDelaySeconds { get; set; }
 
+    [JsonProperty("clearInventoryOnRespawn")]
+    public bool ClearInventoryOnRespawn { get; set; }
+
     [JsonProperty("announceToPlayer")]
     public bool AnnounceToPlayer { get; set; }
 
@@ -34,6 +37,7 @@ public class Configuration
         MediumcoreOnly = true;
         HardcoreIncluded = false;
         RespawnDelaySeconds = 0;
+        ClearInventoryOnRespawn = true;
         AnnounceToPlayer = true;
         AnnounceMessage = "[ReCoreVery] You have received your starter kit!";
         SpawnKits = new List<SpawnKit>
@@ -77,6 +81,7 @@ public class Configuration
         {
             var config = new Configuration();
             config.Save();
+            TShock.Log.ConsoleInfo("[ReCoreVery] Created default configuration file.");
             return config;
         }
 
@@ -86,17 +91,57 @@ public class Configuration
             var config = JsonConvert.DeserializeObject<Configuration>(json);
             if (config == null)
             {
+                TShock.Log.ConsoleError("[ReCoreVery] Config deserialized as null. Using defaults.");
                 config = new Configuration();
                 config.Save();
             }
+            else if (config.SpawnKits == null || config.SpawnKits.Count == 0)
+            {
+                TShock.Log.ConsoleError("[ReCoreVery] No spawn kits found in config. Adding defaults.");
+                config.SpawnKits = new Configuration().SpawnKits;
+                config.Save();
+            }
+
+            foreach (var kit in config.SpawnKits)
+            {
+                foreach (var item in kit.Items)
+                {
+                    int id = GetItemIdStatic(item.ItemNameOrId);
+                    if (id <= 0)
+                    {
+                        TShock.Log.ConsoleError(
+                            $"[ReCoreVery] Warning: Item '{item.ItemNameOrId}' in kit '{kit.Name}' could not be resolved.");
+                    }
+                }
+            }
+
             return config;
         }
-        catch
+        catch (Exception ex)
         {
+            TShock.Log.ConsoleError($"[ReCoreVery] Failed to load config: {ex.Message}");
             var config = new Configuration();
             config.Save();
             return config;
         }
+    }
+
+    private static int GetItemIdStatic(string itemNameOrId)
+    {
+        if (int.TryParse(itemNameOrId, out int itemId))
+            return itemId;
+
+        try
+        {
+            var items = TShock.Utils.GetItemByIdOrName(itemNameOrId);
+            if (items.Count == 1)
+                return items[0].type;
+        }
+        catch
+        {
+        }
+
+        return 0;
     }
 
     public void Save()

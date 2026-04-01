@@ -11,7 +11,7 @@ public class ReCoreVery : TerrariaPlugin
 {
     public override string Name => "ReCoreVery";
     public override string Author => "Neoslyke";
-    public override Version Version => new Version(2, 1, 0);
+    public override Version Version => new Version(2, 2, 0);
     public override string Description => "Gives players starter items after death in mediumcore/hardcore mode";
 
     private Configuration Config { get; set; } = null!;
@@ -24,11 +24,11 @@ public class ReCoreVery : TerrariaPlugin
     public override void Initialize()
     {
         Config = Configuration.Load();
-        
+
         ServerApi.Hooks.GameInitialize.Register(this, OnGameInitialize);
         ServerApi.Hooks.NetGetData.Register(this, OnGetData);
         ServerApi.Hooks.ServerLeave.Register(this, OnServerLeave);
-        
+
         GetDataHandlers.KillMe += OnKillMe;
         GeneralHooks.ReloadEvent += OnReload;
     }
@@ -40,7 +40,7 @@ public class ReCoreVery : TerrariaPlugin
             ServerApi.Hooks.GameInitialize.Deregister(this, OnGameInitialize);
             ServerApi.Hooks.NetGetData.Deregister(this, OnGetData);
             ServerApi.Hooks.ServerLeave.Deregister(this, OnServerLeave);
-            
+
             GetDataHandlers.KillMe -= OnKillMe;
             GeneralHooks.ReloadEvent -= OnReload;
         }
@@ -143,9 +143,9 @@ public class ReCoreVery : TerrariaPlugin
             return;
 
         int difficulty = player.TPlayer.difficulty;
-        
+
         bool shouldGiveKit = false;
-        
+
         if (Config.MediumcoreOnly)
         {
             if (difficulty == 1)
@@ -194,26 +194,21 @@ public class ReCoreVery : TerrariaPlugin
         if (kit == null)
             return;
 
-        if (Config.RespawnDelaySeconds > 0)
+        int delayMs = Config.RespawnDelaySeconds > 0
+            ? Config.RespawnDelaySeconds * 1000
+            : 500;
+
+        Task.Delay(delayMs).ContinueWith(_ =>
         {
-            Task.Delay(Config.RespawnDelaySeconds * 1000).ContinueWith(_ =>
+            if (player.Active)
             {
-                if (player.Active)
+                if (Config.ClearInventoryOnRespawn)
                 {
-                    GiveKit(player, kit);
+                    ClearDefaultSpawnItems(player);
                 }
-            });
-        }
-        else
-        {
-            Task.Delay(500).ContinueWith(_ =>
-            {
-                if (player.Active)
-                {
-                    GiveKit(player, kit);
-                }
-            });
-        }
+                GiveKit(player, kit);
+            }
+        });
     }
 
     private void OnServerLeave(LeaveEventArgs args)
@@ -224,13 +219,31 @@ public class ReCoreVery : TerrariaPlugin
         }
     }
 
+    private void ClearDefaultSpawnItems(TSPlayer player)
+    {
+        var tplayer = player.TPlayer;
+        for (int i = 0; i < tplayer.inventory.Length; i++)
+        {
+            var item = tplayer.inventory[i];
+            if (item != null && item.type != ItemID.None)
+            {
+                tplayer.inventory[i].TurnToAir();
+                NetMessage.SendData((int)PacketTypes.PlayerSlot, -1, -1, null, player.Index, i);
+            }
+        }
+    }
+
     private void GiveKit(TSPlayer player, SpawnKit kit)
     {
         foreach (var itemData in kit.Items)
         {
             int itemId = GetItemId(itemData.ItemNameOrId);
             if (itemId <= 0 || itemId >= ItemID.Count)
+            {
+                TShock.Log.ConsoleError(
+                    $"[ReCoreVery] Failed to resolve item '{itemData.ItemNameOrId}' in kit '{kit.Name}'.");
                 continue;
+            }
 
             int stack = Math.Max(1, itemData.Stack);
             byte prefix = itemData.Prefix;
@@ -255,6 +268,12 @@ public class ReCoreVery : TerrariaPlugin
         if (items.Count == 1)
         {
             return items[0].type;
+        }
+
+        if (items.Count > 1)
+        {
+            TShock.Log.ConsoleError(
+                $"[ReCoreVery] Ambiguous item name '{itemNameOrId}' matched {items.Count} items. Use the item ID instead.");
         }
 
         return 0;
